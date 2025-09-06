@@ -473,6 +473,128 @@
     (ok proposal-id)
   )
 )
+ ;; Vote on a governance proposal
+(define-public (vote-on-proposal (proposal-id uint) (vote-for bool))
+  (let (
+    (proposal (unwrap! (map-get? governance-proposals { proposal-id: proposal-id }) ERR-MICROGRID-NOT-FOUND))
+    (voting-power (ft-get-balance energy-credits tx-sender))
+    (existing-vote (map-get? votes { proposal-id: proposal-id, voter: tx-sender }))
+  )
+    (asserts! (is-eq (get status proposal) "active") ERR-NOT-AUTHORIZED)
+    (asserts! (<= block-height (get voting-deadline proposal)) ERR-NOT-AUTHORIZED)
+    (asserts! (> voting-power u0) ERR-INSUFFICIENT-BALANCE)
+    (asserts! (is-none existing-vote) ERR-ALREADY-EXISTS)
+
+
+    ;; Record the vote
+    (map-set votes
+      { proposal-id: proposal-id, voter: tx-sender }
+      { vote: vote-for, voting-power: voting-power, timestamp: block-height }
+    )
+
+
+    ;; Update proposal vote counts
+    (map-set governance-proposals
+      { proposal-id: proposal-id }
+      (merge proposal {
+        votes-for: (if vote-for (+ (get votes-for proposal) voting-power) (get votes-for proposal)),
+        votes-against: (if vote-for (get votes-against proposal) (+ (get votes-against proposal) voting-power))
+      })
+    )
+
+
+    (ok true)
+  )
+)
+;; REPUTATION SYSTEM AND EMERGENCY FEATURES
+
+
+;; Update reputation score based on energy production reliability
+(define-public (update-reputation (user principal) (performance-score uint))
+  (let ((profile (default-to
+                   { total-contributed: u0, total-credits-earned: u0, microgrids-supported: (list), reputation-score: u0 }
+                   (map-get? user-profiles { user: user }))))
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED) ;; Only contract owner can update reputation
+    (asserts! (<= performance-score u100) ERR-INVALID-AMOUNT)
+
+
+    (map-set user-profiles
+      { user: user }
+      (merge profile { reputation-score: performance-score })
+    )
+
+
+    (ok true)
+  )
+)
+
+;; Emergency shutdown for a microgrid
+(define-public (emergency-shutdown (microgrid-id uint))
+  (let ((microgrid (unwrap! (map-get? microgrids { microgrid-id: microgrid-id }) ERR-MICROGRID-NOT-FOUND)))
+    (asserts! (or (is-eq tx-sender CONTRACT-OWNER) (is-eq tx-sender (get owner microgrid))) ERR-NOT-AUTHORIZED)
+
+
+    (map-set microgrids
+      { microgrid-id: microgrid-id }
+      (merge microgrid { status: "emergency" })
+    )
+
+
+    (ok true)
+  )
+)
+;; COMPREHENSIVE REPORTING AND ANALYTICS
+;; =============================================================================
+
+
+;; Get comprehensive microgrid analytics
+(define-read-only (get-microgrid-analytics (microgrid-id uint))
+  (match (map-get? microgrids { microgrid-id: microgrid-id })
+    grid (some {
+      microgrid-info: grid,
+      crowdfunding-info: (map-get? crowdfunding-campaigns { microgrid-id: microgrid-id }),
+      is-successful: (is-campaign-successful microgrid-id)
+    })
+    none
+  )
+)
+
+
+;; Get governance proposal information
+(define-read-only (get-proposal (proposal-id uint))
+  (map-get? governance-proposals { proposal-id: proposal-id })
+)
+
+
+;; Get user's vote on a proposal
+(define-read-only (get-user-vote (proposal-id uint) (user principal))
+  (map-get? votes { proposal-id: proposal-id, voter: user })
+)
+
+
+;; Get platform-wide statistics
+(define-read-only (get-platform-stats)
+  {
+    total-microgrids: (- (var-get next-microgrid-id) u1),
+    total-energy-produced: (var-get total-energy-produced),
+    total-credits-minted: (var-get total-credits-minted),
+    total-token-supply: (var-get token-total-supply),
+    total-trades: (- (var-get next-trade-id) u1),
+    total-proposals: (- (var-get next-proposal-id) u1)
+  }
+)
+
+
+;; Transfer function for SIP-010 compliance
+(define-public (transfer (amount uint) (sender principal) (recipient principal) (memo (optional (buff 34))))
+  (begin
+    (asserts! (or (is-eq tx-sender sender) (is-eq contract-caller sender)) ERR-NOT-AUTHORIZED)
+    (asserts! (not (is-eq recipient sender)) ERR-INVALID-RECIPIENT)
+    (ft-transfer? energy-credits amount sender recipient)
+  )
+)
+
+
 
 
 
