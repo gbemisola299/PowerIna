@@ -1,4 +1,4 @@
-;; PowerIna- Tokenized Renewable Energy Credits for Solar Microgrids
+;; PowerIna- - Tokenized Renewable Energy Credits for Solar Microgrids
 ;; Empowering African neighborhoods to crowdfund solar infrastructure and track energy distribution
 
 ;; =============================================================================
@@ -69,7 +69,9 @@
 (define-data-var next-microgrid-id uint u1)
 (define-data-var total-energy-produced uint u0)
 (define-data-var total-credits-minted uint u0)
- FUNGIBLE TOKEN IMPLEMENTATION
+
+
+;; SIP-010 FUNGIBLE TOKEN IMPLEMENTATION
 ;; =============================================================================
 
 (define-read-only (get-name)
@@ -105,7 +107,8 @@
   (let ((microgrid-id (var-get next-microgrid-id)))
     (asserts! (> capacity-kwh u0) ERR-INVALID-AMOUNT)
     (asserts! (is-none (map-get? microgrids { microgrid-id: microgrid-id })) ERR-ALREADY-EXISTS)
-   (map-set microgrids
+
+    (map-set microgrids
       { microgrid-id: microgrid-id }
       {
         name: name,
@@ -144,4 +147,76 @@
   }
 )
 
+;; Individual contributions tracking
+(define-map contributions
+  { microgrid-id: uint, contributor: principal }
+  {
+    amount: uint,
+    timestamp: uint,
+    credits-allocated: uint
+  }
+)
 
+;; Start a crowdfunding campaign for a microgrid
+(define-public (start-crowdfunding (microgrid-id uint) (target-amount uint) (duration-blocks uint))
+  (let ((microgrid (unwrap! (map-get? microgrids { microgrid-id: microgrid-id }) ERR-MICROGRID-NOT-FOUND)))
+    (asserts! (is-eq tx-sender (get owner microgrid)) ERR-NOT-AUTHORIZED)
+    (asserts! (> target-amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (> duration-blocks u0) ERR-INVALID-AMOUNT)
+
+    (map-set crowdfunding-campaigns
+      { microgrid-id: microgrid-id }
+      {
+        target-amount: target-amount,
+        raised-amount: u0,
+        deadline: (+ block-height duration-blocks),
+        status: "active",
+        contributors-count: u0
+      }
+    )
+
+    (ok true)
+  )
+)
+
+;; Contribute STX to a microgrid crowdfunding campaign
+(define-public (contribute-to-microgrid (microgrid-id uint) (amount uint))
+  (let (
+    (campaign (unwrap! (map-get? crowdfunding-campaigns { microgrid-id: microgrid-id }) ERR-MICROGRID-NOT-FOUND))
+    (existing-contribution (default-to { amount: u0, timestamp: u0, credits-allocated: u0 }
+                           (map-get? contributions { microgrid-id: microgrid-id, contributor: tx-sender })))
+  )
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (is-eq (get status campaign) "active") ERR-NOT-AUTHORIZED)
+    (asserts! (<= block-height (get deadline campaign)) ERR-NOT-AUTHORIZED)
+
+    ;; Transfer STX to contract
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+    ;; Update contribution record
+    (map-set contributions
+      { microgrid-id: microgrid-id, contributor: tx-sender }
+      {
+        amount: (+ (get amount existing-contribution) amount),
+        timestamp: block-height,
+        credits-allocated: (get credits-allocated existing-contribution)
+      }
+    )
+
+    ;; Update campaign totals
+    (map-set crowdfunding-campaigns
+      { microgrid-id: microgrid-id }
+      (merge campaign {
+        raised-amount: (+ (get raised-amount campaign) amount),
+        contributors-count: (if (is-eq (get amount existing-contribution) u0)
+                             (+ (get contributors-count campaign) u1)
+                             (get contributors-count campaign))
+      })
+    )
+
+    ;; Update user profile
+    (update-user-contribution tx-sender amount microgrid-id)
+
+    (ok true)
+  )
+)
