@@ -69,4 +69,79 @@
 (define-data-var next-microgrid-id uint u1)
 (define-data-var total-energy-produced uint u0)
 (define-data-var total-credits-minted uint u0)
+ FUNGIBLE TOKEN IMPLEMENTATION
+;; =============================================================================
+
+(define-read-only (get-name)
+  (ok TOKEN-NAME)
+)
+
+(define-read-only (get-symbol)
+  (ok TOKEN-SYMBOL)
+)
+
+(define-read-only (get-decimals)
+  (ok TOKEN-DECIMALS)
+)
+
+(define-read-only (get-balance (who principal))
+  (ok (ft-get-balance energy-credits who))
+)
+
+(define-read-only (get-total-supply)
+  (ok (var-get token-total-supply))
+)
+
+(define-read-only (get-token-uri)
+  (ok (some TOKEN-URI))
+)
+
+;; =============================================================================
+;; MICROGRID MANAGEMENT FUNCTIONS
+;; =============================================================================
+
+;; Register a new microgrid for solar installation
+(define-public (register-microgrid (name (string-ascii 50)) (location (string-ascii 100)) (capacity-kwh uint))
+  (let ((microgrid-id (var-get next-microgrid-id)))
+    (asserts! (> capacity-kwh u0) ERR-INVALID-AMOUNT)
+    (asserts! (is-none (map-get? microgrids { microgrid-id: microgrid-id })) ERR-ALREADY-EXISTS)
+   (map-set microgrids
+      { microgrid-id: microgrid-id }
+      {
+        name: name,
+        location: location,
+        capacity-kwh: capacity-kwh,
+        installed-capacity: u0,
+        status: "pending",
+        created-at: block-height,
+        owner: tx-sender
+      }
+    )
+
+    (var-set next-microgrid-id (+ microgrid-id u1))
+    (ok microgrid-id)
+  )
+)
+
+;; Get microgrid information
+(define-read-only (get-microgrid (microgrid-id uint))
+  (map-get? microgrids { microgrid-id: microgrid-id })
+)
+
+;; =============================================================================
+;; CROWDFUNDING SYSTEM
+;; =============================================================================
+
+;; Crowdfunding campaigns for microgrid installations
+(define-map crowdfunding-campaigns
+  { microgrid-id: uint }
+  {
+    target-amount: uint,
+    raised-amount: uint,
+    deadline: uint,
+    status: (string-ascii 20),
+    contributors-count: uint
+  }
+)
+
 
