@@ -1,4 +1,4 @@
-;; PowerIna- - Tokenized Renewable Energy Credits for Solar Microgrids
+;;Powerina- Tokenized Renewable Energy Credits for Solar Microgrids
 ;; Empowering African neighborhoods to crowdfund solar infrastructure and track energy distribution
 
 ;; =============================================================================
@@ -98,7 +98,7 @@
   (ok (some TOKEN-URI))
 )
 
-;; =============================================================================
+
 ;; MICROGRID MANAGEMENT FUNCTIONS
 ;; =============================================================================
 
@@ -216,6 +216,163 @@
 
     ;; Update user profile
     (update-user-contribution tx-sender amount microgrid-id)
+
+    (ok true)
+  )
+)
+
+
+;; HELPER FUNCTIONS
+;; =============================================================================
+
+;; Update user contribution profile
+(define-private (update-user-contribution (user principal) (amount uint) (microgrid-id uint))
+  (let ((profile (default-to
+                   { total-contributed: u0, total-credits-earned: u0, microgrids-supported: (list), reputation-score: u0 }
+                   (map-get? user-profiles { user: user }))))
+    (map-set user-profiles
+      { user: user }
+      (merge profile {
+        total-contributed: (+ (get total-contributed profile) amount),
+        microgrids-supported: (unwrap-panic (as-max-len?
+                                (append (get microgrids-supported profile) microgrid-id) u10))
+      })
+    )
+    true
+  )
+)
+
+;; Get user profile information
+(define-read-only (get-user-profile (user principal))
+  (map-get? user-profiles { user: user })
+)
+
+;; Get crowdfunding campaign information
+(define-read-only (get-crowdfunding-campaign (microgrid-id uint))
+  (map-get? crowdfunding-campaigns { microgrid-id: microgrid-id })
+)
+
+;; Get user's contribution to a specific microgrid
+(define-read-only (get-user-contribution (microgrid-id uint) (user principal))
+  (map-get? contributions { microgrid-id: microgrid-id, contributor: user })
+)
+
+;; Check if crowdfunding campaign is successful
+(define-read-only (is-campaign-successful (microgrid-id uint))
+  (match (map-get? crowdfunding-campaigns { microgrid-id: microgrid-id })
+    campaign (>= (get raised-amount campaign) (get target-amount campaign))
+    false
+  )
+)
+
+;; =============================================================================
+;; ENERGY PRODUCTION AND DISTRIBUTION
+;; =============================================================================
+
+;; Record energy production for a microgrid
+(define-public (record-energy-production (microgrid-id uint) (kwh-produced uint) (kwh-consumed uint))
+  (let (
+    (microgrid (unwrap! (map-get? microgrids { microgrid-id: microgrid-id }) ERR-MICROGRID-NOT-FOUND))
+    (period block-height)
+    (kwh-surplus (if (> kwh-produced kwh-consumed) (- kwh-produced kwh-consumed) u0))
+    (credits-to-mint (/ kwh-surplus u10)) ;; 1 credit per 10 kWh surplus
+  )
+    (asserts! (is-eq tx-sender (get owner microgrid)) ERR-NOT-AUTHORIZED)
+    (asserts! (is-eq (get status microgrid) "active") ERR-NOT-AUTHORIZED)
+
+    ;; Record production data
+    (map-set energy-production
+      { microgrid-id: microgrid-id, period: period }
+      {
+        kwh-produced: kwh-produced,
+        kwh-consumed: kwh-consumed,
+        kwh-surplus: kwh-surplus,
+        credits-minted: credits-to-mint,
+        timestamp: block-height
+      }
+    )
+
+    ;; Mint energy credits for surplus production
+    (if (> credits-to-mint u0)
+      (begin
+        (try! (ft-mint? energy-credits credits-to-mint (get owner microgrid)))
+        (var-set token-total-supply (+ (var-get token-total-supply) credits-to-mint))
+        (var-set total-credits-minted (+ (var-get total-credits-minted) credits-to-mint))
+      )
+      true
+    )
+
+    ;; Update global energy tracking
+    (var-set total-energy-produced (+ (var-get total-energy-produced) kwh-produced))
+
+    (ok credits-to-mint)
+  )
+)
+
+;; Energy trading between users
+(define-map energy-trades
+  { trade-id: uint }
+  {
+    seller: principal,
+    buyer: principal,
+    credits-amount: uint,
+    price-per-credit: uint,
+    total-price: uint,
+    status: (string-ascii 20),
+    created-at: uint,
+    settled-at: (optional uint)
+  }
+)
+
+(define-data-var next-trade-id uint u1)
+
+;; Create an energy trade offer
+(define-public (create-trade-offer (credits-amount uint) (price-per-credit uint))
+  (let ((trade-id (var-get next-trade-id)))
+    (asserts! (> credits-amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (> price-per-credit u0) ERR-INVALID-AMOUNT)
+    (asserts! (>= (ft-get-balance energy-credits tx-sender) credits-amount) ERR-INSUFFICIENT-BALANCE)
+
+    (map-set energy-trades
+      { trade-id: trade-id }
+      {
+        seller: tx-sender,
+        buyer: tx-sender, ;; Will be updated when accepted
+        credits-amount: credits-amount,
+        price-per-credit: price-per-credit,
+        total-price: (* credits-amount price-per-credit),
+        status: "open",
+        created-at: block-height,
+        settled-at: none
+      }
+    )
+
+    (var-set next-trade-id (+ trade-id u1))
+    (ok trade-id)
+  )
+)
+
+;; Accept and execute an energy trade
+(define-public (accept-trade (trade-id uint))
+  (let ((trade (unwrap! (map-get? energy-trades { trade-id: trade-id }) ERR-MICROGRID-NOT-FOUND)))
+    (asserts! (is-eq (get status trade) "open") ERR-NOT-AUTHORIZED)
+    (asserts! (not (is-eq tx-sender (get seller trade))) ERR-NOT-AUTHORIZED)
+
+    ;; Transfer STX from buyer to seller
+    (try! (stx-transfer? (get total-price trade) tx-sender (get seller trade)))
+
+    ;; Transfer energy credits from seller to buyer
+    (try! (ft-transfer? energy-credits (get credits-amount trade) (get seller trade) tx-sender))
+
+    ;; Update trade status
+    (map-set energy-trades
+      { trade-id: trade-id }
+      (merge trade {
+        buyer: tx-sender,
+        status: "completed",
+        settled-at: (some block-height)
+      })
+    )
 
     (ok true)
   )
