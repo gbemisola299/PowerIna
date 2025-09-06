@@ -98,7 +98,6 @@
   (ok (some TOKEN-URI))
 )
 
-
 ;; MICROGRID MANAGEMENT FUNCTIONS
 ;; =============================================================================
 
@@ -583,7 +582,6 @@
     total-proposals: (- (var-get next-proposal-id) u1)
   }
 )
-
 
 ;; Transfer function for SIP-010 compliance
 (define-public (transfer (amount uint) (sender principal) (recipient principal) (memo (optional (buff 34))))
