@@ -377,3 +377,102 @@
     (ok true)
   )
 )
+;; ENERGY DISTRIBUTION QUERIES
+;; =============================================================================
+
+
+;; Get energy production data for a microgrid and period
+(define-read-only (get-energy-production (microgrid-id uint) (period uint))
+  (map-get? energy-production { microgrid-id: microgrid-id, period: period })
+)
+
+
+;; Get trade information
+(define-read-only (get-trade (trade-id uint))
+  (map-get? energy-trades { trade-id: trade-id })
+)
+
+
+;; Get total energy statistics
+(define-read-only (get-energy-stats)
+  {
+    total-energy-produced: (var-get total-energy-produced),
+    total-credits-minted: (var-get total-credits-minted),
+    total-microgrids: (- (var-get next-microgrid-id) u1),
+    total-trades: (- (var-get next-trade-id) u1)
+  }
+)
+
+
+;; Activate a microgrid after successful crowdfunding
+(define-public (activate-microgrid (microgrid-id uint))
+  (let ((microgrid (unwrap! (map-get? microgrids { microgrid-id: microgrid-id }) ERR-MICROGRID-NOT-FOUND)))
+    (asserts! (is-eq tx-sender (get owner microgrid)) ERR-NOT-AUTHORIZED)
+    (asserts! (is-campaign-successful microgrid-id) ERR-NOT-AUTHORIZED) 
+    (map-set microgrids
+      { microgrid-id: microgrid-id }
+      (merge microgrid { status: "active" })
+    )
+
+
+    (ok true)
+  )
+)
+
+
+;; =============================================================================
+;; GOVERNANCE AND VOTING SYSTEM
+;; =============================================================================
+
+
+;; Governance proposals
+(define-map governance-proposals
+  { proposal-id: uint }
+  {
+    title: (string-ascii 100),
+    description: (string-ascii 500),
+    proposer: principal,
+    votes-for: uint,
+    votes-against: uint,
+    voting-deadline: uint,
+    status: (string-ascii 20),
+    created-at: uint
+  }
+)
+;; Voting records
+(define-map votes
+  { proposal-id: uint, voter: principal }
+  { vote: bool, voting-power: uint, timestamp: uint }
+)
+
+
+(define-data-var next-proposal-id uint u1)
+
+
+;; Create a governance proposal
+(define-public (create-proposal (title (string-ascii 100)) (description (string-ascii 500)) (voting-duration uint))
+  (let ((proposal-id (var-get next-proposal-id)))
+    (asserts! (> (ft-get-balance energy-credits tx-sender) u100) ERR-NOT-AUTHORIZED) ;; Minimum 100 credits to propose
+    (asserts! (> voting-duration u0) ERR-INVALID-AMOUNT)
+
+
+    (map-set governance-proposals
+      { proposal-id: proposal-id }
+      {
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        votes-for: u0,
+        votes-against: u0,
+        voting-deadline: (+ block-height voting-duration),
+        status: "active",
+        created-at: block-height
+      }
+    )
+ (var-set next-proposal-id (+ proposal-id u1))
+    (ok proposal-id)
+  )
+)
+
+
+
